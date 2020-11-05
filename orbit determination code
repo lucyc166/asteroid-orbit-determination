@@ -1,0 +1,121 @@
+from Chenodlib import *
+from math import *
+from astropy.table import Table
+import numpy as np
+import sys
+from vpython import *
+
+k = 0.01720209895 #Gaussian gravitational constant
+cAU = 173.144632674240 #speed of light in au/(mean solar)day
+eps = radians(23.4366) #Earth's obliquity
+mu = 1
+
+# user request for observation
+obs_selection = input("Please select 3 observations to use. Enter the numbers of your choice, seperated by commas. ")
+obs_selection = obs_selection.split(",") # generates list of choices; string format
+obs_selection = [int(i)-1 for i in obs_selection] # turns into integer indicies
+
+# opening file and splitting by lines
+three_obs = read_obs_file("CUB6.txt", obs_selection)
+
+# generate a list of RA, dec, R and julian dates from each observation: 1, 2, 3
+julian_date, RA, dec, R_vec = values_from_obs_lines(three_obs)
+
+# converting julian date to taus
+tau = julian_to_tau(julian_date)
+
+# calculating rho hat 1, 2 and 3 using RA and dec
+rho_hat = RA_dec_to_rho_hat(RA, dec)
+
+#### FIRST PASS: TRUNCATED F AND G SERIES ####
+# calculate Ds with rho hats and R vec
+Dij, D1j, D2j, D3j = Ds(rho_hat, R_vec)
+
+# use SEL to find initial r2 and rho2, which will be used in truncated f and g to find r2 vec and r dot vec
+r2_mag_rho2_mag = SEL(tau, R_vec[1], rho_hat[1], D2j, mu)
+
+# user chooses an r2 from SEL
+r2_choice = input('''Please select an number corresponding with the r2 you wish to use as an initial guess. (ie. 1 or 2) 
+The first value of each set of numbers is the r2 magnitude while the second  value is the rho2 magnitude.''' + str(r2_mag_rho2_mag))
+r2_mag = float(r2_mag_rho2_mag[int(r2_choice)-1][0])
+rho2_mag = float(r2_mag_rho2_mag[int(r2_choice)-1][1])
+
+# f and g truncated initial pass: use tau1, tau3 and r2 to find f1, f3, g1, and g3
+# fs = [f1, f3]
+# gs = [g1, g3]
+f, g = initial_f_g_pass(r2_mag, [tau[0], tau[1]], mu)
+
+# use f and g to find c's and d's
+c, d1, d3 = find_c_d(f, g)
+
+# use c's and D's to find more accurate rho magnitude 
+# Dij = [[D0, D11, D12, D13], [D0, D21, D22, D23], [D0, D31, D132, D33]]
+rho_mag = c_Dij_to_rho_mag(c, D1j, D2j, D3j)
+
+# use rho mag, rho vec, and earth-sun vec to find r vecs (1, 2, 3)
+r_vec = []
+for i in range(len(rho_mag)):
+    r_vec.append(rho_mag[i]*rho_hat[i] - R_vec[i])
+
+## obtain r2 vec and r2 do vec ##
+r2_vec = r_vec[1]
+
+# use d1, d3, and r vectors to get r2 dot vec
+r2_dot_vec = d1*r_vec[0] + d3*r_vec[2]
+
+#### FUTURE ITERATIONS: F AND G FUNCTION ####
+# check for convergence; see if difference between guesses is getting smaller
+rho_prev = rho2_mag # SEL code
+rho_calc = rho_mag[1] # truncated f and g
+iterations = 1
+
+while abs(float(rho_calc) - float(rho_prev)) > 10e-13:
+    rho_prev = rho_calc # setting current rho2 as a convergence comparison parameter
+    iterations +=1
+
+    # light travel time correction for taus
+    julian_correction = [0,0,0]
+    for i in range(len(julian_correction)):
+        julian_correction[i] = light_travel_correct(julian_date[i], rho_mag[i])
+    tau = julian_to_tau(julian_correction)
+
+    # recalculate f and g function
+    f, g = f_g_function(r2_vec, r2_dot_vec, tau)
+    c, d1, d3 = find_c_d(f, g)
+
+    # use c's and D's to find more accurate rho magnitude 
+    # Dij = [[D0, D11, D12, D13], [D0, D21, D22, D23], [D0, D31, D132, D33]]
+    rho_mag = c_Dij_to_rho_mag(c, D1j, D2j, D3j)
+
+    # use rho mag, rho vec, and earth-sun vec to find r vecs (1, 2, 3)
+    r_vec = []
+    for i in range(len(rho_mag)):
+        r_vec.append(rho_mag[i]*rho_hat[i] - R_vec[i])
+
+    ## obtain r2 vec and r2 do vec ##
+    r2_vec = r_vec[1]
+
+    # use d1, d3, and r vectors to get r2 dot vec
+    r2_dot_vec = d1*r_vec[0] + d3*r_vec[2]
+
+    # setting up next loop
+    rho_calc = rho_mag[1]
+
+#### RESULTS ####
+print('''
+--- SUCCESS ---
+In {} iterations, r2 vec and r2 dot vec converge to:
+equa r2 vec: {}
+equa r2 dot vec: {}
+'''.format(iterations, r2_vec, r2_dot_vec))
+# changing r vec and r dot vec from equatorial to ecliptic
+#r2_vec = equa_to_eclip(r2_vec, eps).tolist()
+#r2_dot_vec = equa_to_eclip(r2_dot_vec, eps).tolist()
+
+# changing r vec and r dot vec from equatorial to ecliptic
+print('''eclip r2 vec: {}
+eclip r2 dot vec: {}
+'''.format(r2_vec, r2_dot_vec))
+
+# generating 6 orbital elements with r2 vec and r2 dot vec
+semi_major, eccentricity, inclination_angle, long_of_ascending_node, trueanomaly, arg_of_perihelion, mean_anomaly, julian_perihelion = calc_orbitalelements(r2_vec, r2_dot_vec, julian_date[1])
