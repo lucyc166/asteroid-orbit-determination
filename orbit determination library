@@ -1,0 +1,879 @@
+
+
+from math import *
+import numpy as np
+k = 0.01720209895 #Gaussian gravitational constant
+cAU = 173.144632674240 #speed of light in au/(mean solar)day
+eps = radians(23.4366) #Earth's obliquity
+mu = 1
+
+
+#--------------------- #### GENERAL FUNCTIONS #### ---------------------#
+
+## ANGLE CONVERSIONS ##
+# moves angle to bounds of 0, 2pi
+def angle_fixer(angle):
+    from math import pi
+    while angle < 0 or angle >= 2*pi:
+        if angle >= 2*pi:
+            angle -= 2*pi
+        if angle < 0:
+            angle += 2*pi
+    return angle
+
+# puts angle in correct quadrant depending on sign of sin and cos
+def anglechecker(sine, cosine):
+    from math import asin, acos, pi
+    if cosine > 0 and sine > 0: #quad 1
+        return asin(sine)
+    if cosine < 0 and sine > 0: #quad 2
+        return acos(cosine)
+    if cosine < 0 and sine < 0: #quad 3
+        return pi - asin(sine)
+    if cosine > 0 and sine < 0: #quad 4
+        return 2*pi + asin(sine)
+
+## ERROR ##
+# percent error between two values
+def percent_error(calculated, theoretical):
+    percent_error = (100* (abs(calculated - theoretical) / theoretical))
+    return percent_error
+
+# given a list of values with the calculated values and the theoretical values, the functions returns a list of percent error
+def list_error(calculated, theoretical):
+    percent_error = []
+    for i in range(len(calculated)):
+        percent_error.append(100* round((abs(calculated[i] - theoretical[i]) / theoretical[i]),5))
+    return percent_error
+
+
+
+"""#set 1 set 2 set 3, each observations"""
+## CONVERSIONS ##
+# RA decimal degrees to hour angle sexagesimal
+def degrees_to_HA(RA):
+    RA = RA/15
+    hours = int(RA)
+    minutes = int((RA-hours)*60)
+    seconds = ((RA-hours)*60 - minutes)*60
+    seconds = round(seconds,2)
+    return "{}:{}:{}".format(hours, minutes,seconds)
+
+# dec decimal degrees to hour angle sexagesimal
+def degrees_to_sexa(dec):
+    degrees = int(dec)
+    arcmin = int((dec-degrees)*60)
+    arcsec = ((dec-degrees)*60 - arcmin)*60
+    arcsec = round(arcsec,2)
+    return "{}:{}:{}".format(degrees, arcmin, arcsec)
+
+# RA sexagesimal to decimal degrees
+def RA_to_deci(hour_angle, delimiter):
+    hours, minutes, seconds = hour_angle.split(delimiter)
+    RAdegr = 15*(float(hours) + float(minutes)/60 + float(seconds)/3600)
+    return RAdegr
+
+# dec sexagesimal to decimal degrees
+def dec_to_deci(dec, delimiter):
+    degrees, arcmin, arcsec = dec.split(delimiter)
+    if float(degrees) < 0:
+        decdegr = float(degrees) - float(arcmin)/60 - float(arcsec)/3600
+    if float(degrees) >= 0:
+        decdegr = float(degrees) + float(arcmin)/60 + float(arcsec)/3600
+    return decdegr
+
+## DISTANCE ##
+# distance between two coordinates
+def distance(coord1, coord2):
+    from math import sqrt
+    length = sqrt( (coord1[0]-coord2[0])**2 + (coord1[1]-coord2[1])**2 )
+    return length
+
+## TABLE ##
+# creates a table with each list as a column
+"""
+header = ("color", "fruit")
+color = ("blue", "red")
+fruit = ("blueberry", "apple")
+print(list_to_table(header, color, fruit))"""
+def list_to_table(header_list, *list): 
+    import numpy as np
+    from astropy.table import Table
+    table = np.column_stack([i for i in list])
+    return Table(table, names = header_list).more()
+
+#--------------------- #### INPUTING DATA FUNCTIONS #### ---------------------#
+
+## --- JPL POS AND VEL VECTOR INPUT BY DATE --- ##
+def jpl_vec_import(datafile, date):
+    import numpy as np
+    from math import pi
+
+    # extracting data from file
+    file = open(datafile, "r")
+    file = file.read()
+    file = file.split("A.D.")
+    # finding block of text that contains data for the requested date
+    # reformatting the data
+    for i in file:
+        if date in i:
+            requested_values = i
+            prev_date = file[file.index(i) - 1]
+
+    requested_values = requested_values.split()
+    prev_date = prev_date.split()
+    # going to previous date and extracting second to last element (julian date)
+    julian_date = float(prev_date[-2])
+
+    # collecting data by indicies and casting them as floats
+    # converting velocity components from solar days to gaussian by dividing by k
+    conversion = 365.256363004/(2*pi)
+
+    # creating lists for position and velocity vectors
+    # position = [x,y,z]
+    # velocity_vectors = [vx,vy,vz]
+    position_vectors = [ float(requested_values[5]) , float(requested_values[7].replace("=","")) , float(requested_values[10]) ]
+    velocity_vectors = [ float(requested_values[12])*conversion , float(requested_values[14])*conversion , float(requested_values[16])*conversion ]
+    return position_vectors, velocity_vectors, julian_date
+
+
+## --- OD FINAL CODE TEXT INPUT--- ##
+"""
+2457927.76426 17:27:15.08 -24:44:53.0 -3.092452663004570E-02 9.321463833793008E-01 4.040478235741391E-01
+2457933.82867 17:24:45.40 -19:56:10.0 -1.332295829163480E-01 9.247467444400224E-01 4.008445345253298E-01
+2457946.72736 17:24:45.25 -13:43:10.8 -3.447568692743634E-01 8.774346958399394E-01 3.803339332649296E-01
+2457949.68307 17:25:32.53 -12:49:03.3 -3.913104093456325E-01 8.607286185335874E-01 3.730909364096827E-01"""
+
+# opening file and splitting by lines
+def read_obs_file(textfile, obs_selection):
+    f = open(textfile, "r")
+    observation = []
+    three_obs = []
+    file = f.read().splitlines()
+    observation = [i.split(" ") for i in file] 
+    # [[julian date 1, RA1, dec1, sunx1, suny1, sunz1], [julian date 2, RA2, dec2, sunx2, suny2, sunz2], [julian date 3, RA3, dec3, sunx3, suny3, sunz3]]
+    for obs in observation:
+        for data in range(len(obs)):
+            # changes all values to floats (except for RA and dec)
+            if ":" not in obs[data]:
+                obs[data] = float(obs[data])
+
+    # check which lines correspond with choices and adding them to new list
+    for line_num in range(len(observation)):
+        for choice in obs_selection:
+            if line_num == int(choice):
+                three_obs.append(observation[line_num])
+    return three_obs
+
+# generate a list of RA, dec, R and julian dates from each observation: 1, 2, 3
+def values_from_obs_lines(three_obs):
+    from numpy import radians
+    julian_date, RA, dec, R_vec = [], [], [], []
+    for obs in three_obs:
+        julian_date.append(obs[0])
+        # convert RA and dec to degrees with decimal values
+        RA.append(radians(RA_to_deci(obs[1], ":"))) # converting to decimal, then radians
+        dec.append(radians(dec_to_deci(obs[2], ":"))) # converting to decimal, then radians
+        R_vec.append(obs[3:6])
+    return julian_date, RA, dec, R_vec
+    
+#--------------------- #### COORDINATE TRANSFORMATION FUNCTIONS #### ---------------------#
+
+## equatorial to ecliptic
+def equa_to_eclip(equa_vec, obliq):
+    import numpy as np
+    from math import sin, cos, radians
+    obliq = radians(23.4366)
+    eclip_trans_matrix = np.array([[1, 0, 0]
+                                , [0, cos(obliq), sin(obliq)]
+                                , [0, -sin(obliq), cos(obliq)]])
+    eclip_vec = eclip_trans_matrix.dot(equa_vec)
+    return eclip_vec
+
+#--------------------- #### SCALAR EQUATION OF LAGRANGE FUNCTIONS #### ---------------------#
+## main SEL function
+def SEL(taus, Sun2, rhohat2, Ds, mu):
+    from Chenodlib import r2_coefficient_solver, r2_from_equation, rho2_from_r2
+    import numpy as np
+    a, b, c, A, B = r2_coefficient_solver(taus, Sun2, rhohat2, Ds, mu)
+    r2_roots = r2_from_equation(a, b, c)
+    rho2s = rho2_from_r2(r2_roots, A, B, mu)
+    set = del_r2_rho2(r2_roots, rho2s)
+    return set # returns [(r2_1, rho2_1, r2_2, rho2_2, r2_n, rho2_n)]
+
+## functions used in SEL main function
+# solve for coefficients used to create polynomial with r2 as root
+def r2_coefficient_solver(taus, Sun2, rhohat2, Ds, mu):
+    import numpy as np
+    A1 = taus[1]/taus[2]
+    B1 = (A1/6)*(taus[2]**2 - taus[1]**2)
+    A3 = -1* taus[0] / taus[2]
+    B3 = (A3/6)*(taus[2]**2 - taus[0]**2)
+
+    A = (A1*Ds[1] - Ds[2] + A3*Ds[3])/ (-Ds[0])
+    B = (B1*Ds[1] + B3 * Ds[3]) / (-Ds[0])
+
+    E = -2*np.dot(rhohat2, Sun2)
+    F = (np.linalg.norm(Sun2))**2
+
+    a = -1*(A**2 + A*E + F)
+    b = -1*mu*(2*A*B + B*E)
+    c = -1*mu**2 * B**2
+    return a, b, c, A, B
+
+# r2 polynomial, solve for real and positive roots
+def r2_from_equation(a, b, c):
+    import numpy as np
+    # solving the below equation and finding r2
+    real_roots = []
+    roots = np.roots([1, 0, a, 0, 0, b, 0, 0, c])
+    # only want real and positive roots 
+    for i in roots:
+        if np.isreal(i) and i > 0:
+            real_roots.append(np.real(i))
+    real_roots = sorted(real_roots)
+    return real_roots
+
+# finding rho2 (range) for each r2
+def rho2_from_r2(real_roots, A, B, mu):
+    rho2s = []
+    for i in real_roots:
+        rho2 = A + mu*B / i**3
+        rho2s.append(rho2)
+    return rho2s
+
+# get rid of roots with negative rhos
+# zip them together in a pair, if rho is negative, remove that pair
+def del_r2_rho2(r2_roots, rho2s):
+    a = list(zip(r2_roots, rho2s))
+    for set in reversed(a):
+        if set[1] < 0:
+            a.remove(set)
+    return a
+    
+#--------------------- #### F AND G FUNCTIONS: FUNCTION, TRUNCATED, 3RD, 4TH #### ---------------------#
+
+## --- F AND G FUNCTION --- ##
+## main f and g function
+def f_g_function(r2_vec, r2_dot_vec, tau):
+    import numpy as np
+    from math import sin, cos
+    ang_mom_vec = np.cross(r2_vec, r2_dot_vec)
+    ang_mom_mag, r_mag, r_dot_mag, r_hat, velocity_sq = calc_positions(ang_mom_vec, r2_vec, r2_dot_vec)
+    semi_major = calc_semi_major(r_mag, velocity_sq)
+    if semi_major < 0:
+        raise ValueError("semi_major < 0")
+    else:
+        eccentricity = calc_eccentricity(ang_mom_mag, semi_major)
+        n = find_n(1, semi_major)
+        deltaE = []
+        f_result = []
+        g_result = []
+        for i in range(len(tau)):
+            # finding f and g for both tau 1 and 3 by using respective delta E
+            deltaE.append(newton_raphson_delta_E(n, eccentricity, semi_major, 1e-12, r2_vec, r2_dot_vec, tau[i]))
+            f_result.append(1-(semi_major/r_mag)*(1-cos(deltaE[i]))) #f
+            g_result.append(tau[i] + (1/n)*(sin(deltaE[i])-deltaE[i])) #g
+        return f_result, g_result
+
+## functions used in f and g function main function
+# need to find eccentricity and semi-major axis to find n and to iterate with newton raphson
+
+# n is also needed for newton-raphson
+def find_n(mu, semi_major):
+    from math import sqrt
+    n = sqrt(mu/(semi_major**3))
+    return n  # radians per gaussian
+
+# calculating delta E which is needed in f and g function
+def newton_raphson_delta_E(n, eccentricity, a, tol, r2_vec, r2_dot_vec, tau):
+    from math import sin, cos
+    import numpy as np
+    r2 = np.linalg.norm(r2_vec)
+    r2_dot = np.linalg.norm(r2_dot_vec)
+    count = 0
+
+    # assigning variables to clean up the code
+    b = (1 - r2/a)
+    c = np.dot(r2_vec, r2_dot_vec)/(n*a**2)
+
+    # checking which first guess for x to use depending on eccentricity
+    if eccentricity <= 0.1:
+        x = n*tau
+    else:
+        # sign matching
+        sign = c*cos(n*tau - c) + b*sin(n*tau - c)
+        if sign < 0:
+            x = n*tau - 0.85*eccentricity - c # initial guess of x, negative
+        elif sign > 0:
+            x = n*tau + 0.85*eccentricity - c # initial guess of x, positive
+
+    # initial guess for n*tau
+    calc_ntaui = x - b*sin(x) + c*(1-cos(x))
+
+    # keeps recalculating while the difference between the guess and actual is bigger than convergence parameter, tolerance
+    while abs(calc_ntaui - n*tau) > tol:
+        # NEWTON RAPHSON: x1 = x0 - f(x0)/f'(x0)
+        # calculating n*tau using new eccentric anomaly
+        calc_ntaui = x - b*sin(x) + c*(1-cos(x))
+
+        # calculating new eccentric anomaly using newton raphson
+        function = x - b*sin(x) + c*(1-cos(x)) - n*tau
+        function_prime = 1 - b*cos(x) + c*sin(x)
+        x = x - function/function_prime
+        count += 1
+    return x #, calc_ntaui, tol, n*tau, count # this is delta E
+
+## --- F AND G SERIES TRUNCATED FUNCTION --- ##
+# tau needs to be a list of taus (tau1 and tau3)
+def initial_f_g_pass(r2, tau, mu):
+    f_result = []
+    g_result = []
+    for i in range(len(tau)):
+        # finding f and g for both tau 1 and 3
+        fi = 1 - (mu*tau[i]**2)/(2*r2**3)
+        gi = tau[i] #- ((mu*tau[i]**3) /(6*r2**3))
+        f_result.append(fi)
+        g_result.append(gi)
+    return f_result, g_result
+
+## --- F AND G SERIES 3RD ORDER FUNCTION --- ##
+def third_f_g(tau, mu, r2_vec, r2_dot_vec):
+    r2 = np.linalg.norm(r2_vec)
+    f_result = []
+    g_result = []
+    for i in range(len(tau)):
+        # finding f and g for both tau 1 and 3
+        fi = 1 - (mu*tau[i]**2)/(2*r2**3) + (mu*np.dot(r2_vec, r2_dot_vec) * tau[i]**3) / (2*r2 ** 5)
+        gi = tau[i] - (mu*tau[i]**3) / (6*r2**3)
+        f_result.append(fi)
+        g_result.append(gi)
+    return f_result, g_result
+
+## --- F AND G SERIES 4TH ORDER FUNCTION --- ##
+def fourth_f_g(tau, mu, r2_vec, r2_dot_vec):
+    r2 = np.linalg.norm(r2_vec)
+    
+    # using other variables to make code cleaner
+    u = mu/r2**3
+    z = np.dot(r2_vec, r2_dot_vec)/(r2**2)
+    q = (np.dot(r2_dot_vec, r2_dot_vec)/r2**2) - u
+
+    f_result = []
+    g_result = []
+    for i in range(len(tau)):
+        # finding f and g for both tau 1 and 3
+        fi = 1 - (mu*tau[i]**2)/(2*r2**3) + (mu*np.dot(r2_vec, r2_dot_vec) * tau[i]**3) / (2*r2 ** 5) + ((3*u*q - 15*u*z**2 + u**2)*tau[i]**4)/24
+        gi = tau[i] - (mu*tau[i]**3) / (6*r2**3) + ((6*u*z)*tau[i]**4)/24
+        f_result.append(fi)
+        g_result.append(gi)
+    return f_result, g_result
+
+#--------------------- #### METHOD OF GAUSS FUNCTIONS #### ---------------------#
+## functions used in MoG
+# change from julian days to gaussian days
+
+## --- SETUP --- ##
+def julian_to_tau(julian_date):
+    k = 0.01720209895
+    # converting julian date to taus
+    # tau3 = k(t3 - t2)
+    # tau1 = k(t1 - t2)
+    # tau = k(t3 - t1)
+    tau3 = k*(julian_date[2] - julian_date[1])
+    tau1 = k*(julian_date[0] - julian_date[1])
+    tau = tau3 - tau1
+    tau = [tau1, tau3, tau]
+    return tau
+
+# calculating rho hat 1, 2 and 3 using RA and dec
+# need a rho hat for each observation
+def RA_dec_to_rho_hat(RA, dec):
+    from math import cos, sin
+    import numpy as np
+    rho_hat = []
+    for i in range(len(RA)):
+        rho_hat.append([cos(RA[i])*cos(dec[i]), sin(RA[i])*cos(dec[i]), sin(dec[i])])
+    rho_hat = np.array(rho_hat)
+    return rho_hat
+
+## --- FIRST PASS --- ### 
+# calculate Ds with rho hats and Rs
+def Ds(rho_hat, R_vec):
+    import numpy as np
+    D0 = rho_hat[0].dot(np.cross(rho_hat[1], rho_hat[2]))
+    D1j, D2j, D3j = [D0], [D0], [D0]
+
+    for i in range(len(R_vec)):
+        D1j.append(np.cross(R_vec[i], rho_hat[1]).dot(rho_hat[2]))
+        D2j.append(np.cross(rho_hat[0], R_vec[i]).dot(rho_hat[2]))
+        D3j.append(rho_hat[0].dot(np.cross(rho_hat[1], R_vec[i])))
+    Dij = [D1j, D2j, D3j]
+    return Dij, D1j, D2j, D3j
+
+# scalar equation of lagrange #
+# f and g truncated #
+
+# use f and g to find c's and d's
+def find_c_d(f, g):
+    c1 = g[1] / (f[0]*g[1] - g[0]*f[1])
+    c2 = -1
+    c3 = -g[0] / (f[0]*g[1] - g[0]*f[1])
+    c = [c1, c2, c3]
+
+    d1 = -f[1] / (f[0]*g[1] - f[1]*g[0])
+    d3 = f[0] / (f[0]*g[1] - f[1]*g[0])
+    return c, d1, d3
+
+# use c's and D's to find more accurate rho magnitude 
+# Dij = [[D0, D11, D12, D13], [D0, D21, D22, D23], [D0, D31, D132, D33]]
+def c_Dij_to_rho_mag(c, D1j, D2j, D3j):
+    rho1 = (c[0]*D1j[1] + c[1]*D1j[2] + c[2]*D1j[3])/ (c[0]*D1j[0])
+    rho2 = (c[0]*D2j[1] + c[1]*D2j[2] + c[2]*D2j[3])/ (c[1]*D2j[0])
+    rho3 = (c[0]*D3j[1] + c[1]*D3j[2] + c[2]*D3j[3])/ (c[2]*D3j[0])
+    rho_mag = [rho1, rho2, rho3]
+    return rho_mag
+
+## --- FUTURE ITERATIONS --- ### 
+# light travel time correction after first pass
+def light_travel_correct(julian_date, rho):
+    k = 0.01720209895
+    c = 173.144632674240
+    # correct from the origional julian date
+    julian_date = julian_date - rho / c # correct for light-travel time
+    return julian_date
+
+# f and g function
+
+#--------------------- #### ORBITAL ELEMENTS FUNCTIONS #### ---------------------#
+
+## main orbital element function ##
+# calculate 6 orbital elements along with true anomaly and julian date of perihelion
+def calc_orbitalelements(r_vec, r_dot_vec, julian_date): 
+    from Chenodlib import anglechecker, angularmom, calc_positions, calc_semi_major, calc_eccentricity, calc_inclination_radians, calc_long_of_ascending_node_radians, calc_trueanomaly_radians, calc_arg_of_perihelion_radians, calc_mean_anomaly_radians, calc_julian_date_perihelion
+    import numpy as np
+    from math import acos, asin, atan, pi, sqrt, degrees, sin, cos
+
+    # grabbing initial position, velocity, and angular mom values
+    ang_mom_vec = angularmom(r_vec, r_dot_vec)
+    ang_mom_mag, r_mag, r_dot_mag, r_hat, velocity_sq = calc_positions(ang_mom_vec, r_vec, r_dot_vec)
+
+    # calculating each orbital element, including true anomaly
+    semi_major = calc_semi_major(r_mag, velocity_sq)
+    eccentricity = calc_eccentricity(ang_mom_mag, semi_major)
+    inclination_angle = calc_inclination_radians(ang_mom_vec)
+    long_of_ascending_node = calc_long_of_ascending_node_radians(ang_mom_vec, ang_mom_mag, inclination_angle)
+    trueanomaly = calc_trueanomaly_radians(semi_major, eccentricity, ang_mom_mag, r_mag, r_vec, r_dot_vec) #not an orbital element
+    arg_of_perihelion = calc_arg_of_perihelion_radians(r_vec, r_mag, inclination_angle, trueanomaly, long_of_ascending_node)
+    mean_anomaly = calc_mean_anomaly_radians(eccentricity, r_mag, semi_major)
+
+    julian_date_perihelion = calc_julian_date_perihelion(mean_anomaly, julian_date, semi_major)
+
+    # angles are in radians
+    return semi_major, eccentricity, inclination_angle, long_of_ascending_node, trueanomaly, arg_of_perihelion, mean_anomaly, julian_date_perihelion
+
+## individual functions used to calculate orbital elements ##
+def angularmom(r_vec, r_dot_vec):
+    import numpy as np
+    from math import pi
+    # getting vector values for the angular mom
+    # h = r cross rdot 
+    ang_mom_vec = np.cross(r_vec, r_dot_vec)
+    return ang_mom_vec
+
+def calc_positions(ang_mom_vec, pos_vec, vel_vec):
+    import numpy as np
+    # magnitudes
+    ang_mom_mag = np.linalg.norm(ang_mom_vec)
+    pos_mag = np.linalg.norm(pos_vec)
+    vel_mag = np.linalg.norm(vel_vec)
+
+    # unit vectors
+    rhat = pos_vec/pos_mag # unit vector of r
+
+    # rho and velocity
+    #pvec = -np.cross(ang_mom_vec, vel_vec) - rhat
+    #p = np.linalg.norm(pvec)
+    velocity_sq = np.dot(vel_vec, vel_vec)
+    ##rdoubledotvec = -1* rvec/r**3
+    return ang_mom_mag, pos_mag, vel_mag, rhat, velocity_sq
+
+def calc_semi_major(pos_mag, velocity_sq):
+    semi_major = 1/(2/pos_mag-velocity_sq)
+    return semi_major
+
+def calc_eccentricity(ang_mom_mag, semi_major):
+    from math import sqrt
+    eccentricity = sqrt(1-ang_mom_mag**2/semi_major)
+    return eccentricity
+
+def calc_inclination_radians(ang_mom_vec):
+    from math import sqrt, atan
+    # i = tan-1(sqrt(hx^2 + hy^2)/hz) , no need for quadrant check
+    inclination_angle = atan(sqrt(ang_mom_vec[0]**2 + ang_mom_vec[1]**2)/(ang_mom_vec[2]))
+    return inclination_angle # radians
+
+def calc_long_of_ascending_node_radians(ang_mom_vec, ang_mom_mag, inclination_angle):
+    from Chenodlib import anglechecker
+    from math import sin
+    sin_omega = ang_mom_vec[0]/(ang_mom_mag*sin(inclination_angle))
+    cos_omega = -ang_mom_vec[1]/(ang_mom_mag*sin(inclination_angle))
+    # updating angle based on quadrant
+    omega = anglechecker(sin_omega, cos_omega)
+    return omega
+
+def calc_trueanomaly_radians(semi_major, eccentricity, ang_mom_mag, r_mag, r_vec, r_dot_vec):
+    import numpy as np
+    from Chenodlib import anglechecker
+    sin_trueanomaly = (semi_major*(1-eccentricity**2)/(eccentricity*ang_mom_mag) * (np.dot(r_vec, r_dot_vec)/r_mag)).item()
+    cos_trueanomaly = (1/eccentricity * (semi_major*(1-eccentricity**2)/r_mag - 1)).item()
+    # updating angle based on quadrant
+    trueanomaly = anglechecker(sin_trueanomaly, cos_trueanomaly)
+    return trueanomaly
+
+def calc_arg_of_perihelion_radians(pos_vec, pos_mag, inclination_angle, trueanomaly, omega):
+    from Chenodlib import angle_fixer
+    from math import cos, sin, atan2
+    cosU = (pos_vec[0]*cos(omega) + pos_vec[1]*sin(omega)) / pos_mag
+    sinU = (pos_vec[2]/(pos_mag*sin(inclination_angle)))
+    U = atan2(sinU,cosU)
+    #U = anglechecker(sinU, cosU)
+    arg_of_perihelion = U - trueanomaly
+
+    # fixing angle so it's in the right bounds
+    arg_of_perihelion = angle_fixer(arg_of_perihelion)
+    return arg_of_perihelion
+
+def calc_mean_anomaly_radians(eccentricity, pos_mag, semi_major):
+    from math import sin, acos
+    eccentric_anomaly = acos((1/eccentricity)*(1 - pos_mag / semi_major))
+    mean_anomaly = eccentric_anomaly - eccentricity * sin(eccentric_anomaly)
+    return mean_anomaly
+
+def calc_julian_date_perihelion(mean_anomaly, julian_date, semi_major):
+    from math import sqrt, pi
+    k = 1 / (365.256363004/(2*pi)) 
+    temp = sqrt(k**2/semi_major**3)
+    julian_date_perihelion = -1*((mean_anomaly - julian_date * temp)/temp)
+    return julian_date_perihelion
+
+
+#--------------------- #### NEWTON RAPHSON MEAN AND ECC ANOMALY #### ---------------------#
+
+# use newton raphson to find eccentric anomaly given mean anomaly
+# M = E - esin(E)
+def newton_raphson(mean_anom, ecc, tol):
+    from math import sin, cos
+    count = 0
+    calc_ecc_anom = mean_anom #ecc_anom # initial guess of E
+
+    # keeps recalculating while the difference between the guess and actual is bigger than convergence parameter, tolerance
+    calc_mean_anom = calc_ecc_anom - ecc * sin(calc_ecc_anom) #setting mean anomaly based on eccentric anomaly
+
+    while abs(calc_mean_anom - mean_anom) > tol:
+        # NEWTON RAPHSON: x1 = x0 - f(x0)/f'(x0), THUS:
+        # f(E) = E - esinE - M = 0 
+        # f'(E) = 1 - ecosE
+
+        # calculating mean anomaly using new eccentric anomaly
+        calc_mean_anom = calc_ecc_anom - ecc * sin(calc_ecc_anom)
+
+        # calculating new eccentric anomaly using newton raphson
+        calc_ecc_anom = calc_ecc_anom - (calc_ecc_anom - ecc*sin(calc_ecc_anom) - mean_anom) / (1-ecc*cos(calc_ecc_anom))
+        count += 1
+
+    return calc_ecc_anom, calc_mean_anom, tol, mean_anom, count
+#print(newton_raphson(0.42, 0.8, 1e-06))
+
+#--------------------- #### MEAN ANOMALY W.R.T. TIME #### ---------------------#
+
+"""
+## main mean anomaly function
+# mean anom for a given julian
+def mean_anom_from_aer(mu, r2_mag, semi_major, eccentricity, req_julian, julian_date_2, trueanomaly):
+    from math import sin, cos, degrees
+    k = 0.01720209895
+    #from Chenodlib import ecc_anom_from_aer, mean_anom_from_ecc_anom, find_n, mean_anom_julian
+    ecc_anom = ecc_anom_from_aer(r2_mag, semi_major, eccentricity, trueanomaly)
+    mean_anom_2 = mean_anom_from_ecc_anom(ecc_anom, eccentricity)
+    n = find_n(mu, semi_major)* k
+    future_mean_anom = mean_anom_julian(req_julian, julian_date_2, mean_anom_2, n)
+    return future_mean_anom
+
+## functions used in mean anomaly function
+# find eccentric anomaly given semi-major, ecc, and r magnitude
+def ecc_anom_from_aer(r_mag, semi_major, eccentricity, trueanomaly):
+    from math import acos, pi
+    ecc_anom = acos(1/eccentricity*(1 - r_mag/semi_major))
+    # keep eccentric anomaly on same side of circle as true anomaly
+    if trueanomaly > pi:
+        ecc_anom = 2*pi - ecc_anom
+    return ecc_anom
+
+# use eccentric anomaly to find mean anomaly
+# M = E - esin(E)
+def mean_anom_from_ecc_anom(ecc_anom, eccentricity):
+    from math import sin
+    mean_anom = ecc_anom - eccentricity*sin(ecc_anom)
+    return mean_anom
+
+# solving for mean anomaly given a julian date
+# use formula m(t) = m2(t) + n(t - t2)
+def mean_anom_julian(req_julian, julian_date_2, mean_anom_2, n):
+    k = 0.01720209895
+    n = n*k
+    mean_anom = mean_anom_2 + n*(req_julian - julian_date_2)
+    return mean_anom"""
+
+#--------------------- #### EPHEMERIS GENERATOR (GIVEN ORB ELEMENTS, FIND RA AND DEC) #### ---------------------#
+
+## main ephemeris generator function
+# ephemeris generation: orb elements to RA and dec
+
+def ephemeris_generator(eccentricity, semi_major, inclination, long_of_ascending_node, arg_of_perihelion, julian_perihelion, requested_julian):
+    import numpy as np
+    # calculating mean anomaly from orbital elements and date given
+    mean_anomaly = calc_mean_anomaly_T(eccentricity, semi_major, julian_perihelion, requested_julian)
+    # finding eccentric anomaly from mean anomaly using newton raphson method
+    calc_ecc_anom, calc_mean_anom, tol, mean_anom, count = newton_raphson(mean_anomaly, eccentricity, 1e-12)
+    # changing from position vector to cartesian
+    cartesian_vec = pos_vec_to_cartesian(semi_major, eccentricity, calc_ecc_anom)
+    # changing from cartesian to ecliptic
+    ecliptic_vec = cartesian_to_ecliptic(cartesian_vec, long_of_ascending_node, inclination, arg_of_perihelion)
+    # changing from ecliptic to equatorial
+    ecliptic = 23.446
+    equa_vec = ecliptic_to_equatorial(ecliptic_vec, ecliptic)
+    # finding earth-sun vector
+    earth_sun_vec = [-6.572934174715508E-01, 7.093176617168137E-01, 3.074609463488512E-01]
+    # finding range vector
+    range_vec = earth_sun_vec_to_range_vec(earth_sun_vec, equa_vec)
+    # RA and dec from range vector 
+    RA_dec = np.degrees(range_vec_to_RA_dec(range_vec))
+    return RA_dec
+
+## mean anomaly from julian date and perihelion
+def calc_mean_anomaly_T(eccentricity, semi_major, julian_perihelion, requested_julian):
+    from math import sqrt
+    k = 0.01720209894
+    mu = 1.000000
+    n = k*(sqrt(mu/semi_major**3))
+    mean_anomaly = n*(requested_julian-julian_perihelion)
+    return mean_anomaly
+
+## move from r vec to cartesian
+def pos_vec_to_cartesian(semi_major, eccentricity, ecc_anomaly):
+    import numpy as np
+    from math import cos, sqrt, sin
+    x = semi_major*cos(ecc_anomaly) - semi_major*eccentricity
+    y = semi_major*sqrt(1-eccentricity**2) * sin(ecc_anomaly)
+    z = 0
+    cartesian_vec = np.array([x,y,z])
+    return cartesian_vec
+
+## move from cartesian to ecliptic plane
+def cartesian_to_ecliptic(cartesian_vec, omega, i, w):
+    import numpy as np
+    from math import sin, cos
+    A = np.array([[cos(omega), -sin(omega), 0]
+                , [sin(omega), cos(omega), 0]
+                , [0, 0, 1]])
+
+    B = np.array([[1, 0, 0]
+                , [0, cos(i), -1*sin(i)]
+                , [0, sin(i), cos(i)]])
+
+    C = np.array([[cos(w), -1*sin(w), 0]
+                , [sin(w), cos(w), 0]
+                , [0, 0, 1]])
+    eclip_trans_matrix = A.dot(B).dot(C)
+    ecliptic_vec = eclip_trans_matrix.dot(cartesian_vec)
+    return ecliptic_vec
+
+## move from ecliptic to equatorial
+def ecliptic_to_equatorial(ecliptic_vec, ecliptic):
+    import numpy as np
+    from math import sin, cos, radians
+    ecliptic = radians(ecliptic)
+    equa_trans_matrix = np.array([[1, 0, 0]
+                                , [0, cos(ecliptic), -1*sin(ecliptic)]
+                                , [0, sin(ecliptic), cos(ecliptic)]])
+    equa_vec = equa_trans_matrix.dot(ecliptic_vec)
+    return equa_vec
+
+## go from earth sun vector to rho
+def earth_sun_vec_to_range_vec(earth_sun_vec, equa_vec):
+    range_vec = equa_vec + earth_sun_vec
+    return range_vec
+
+## rho to RA and dec
+def range_vec_to_RA_dec(range_vec): # aka rho
+    from math import asin, atan2, cos
+    import numpy as np
+    from Chenodlib import anglechecker
+    range_hat = range_vec / np.linalg.norm(range_vec)
+    dec = asin(range_hat[2])
+    RA = atan2(range_hat[1]/cos(dec), range_hat[0]/cos(dec))
+    RA = angle_fixer(RA)
+    RA_dec = [RA, dec]
+    return RA_dec
+
+
+# MONTE CARLO CODE
+def histogram(x_values, bins, xlabel, ylabel, title):
+    import matplotlib.pyplot as plt
+    import seaborn
+    seaborn.set()
+    plt.hist(x_values, bins)
+    plt.title(title)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    return plt.show()
+
+def outlier_reject(values):
+    import numpy as np
+    import scipy
+    outlier = 1.5* scipy.stats.iqr(values)
+    median = np.median(values)
+    keep = []
+    for i in values:
+        if i > (median - outlier) and i < (median + outlier):
+            keep.append(i)
+    return keep
+
+# monte carlo 
+def st_dev_mean_error_SDOM(calc_values, theor_values):
+    from math import sqrt
+    number = len(calc_values) # num
+    mean = sum(calc_values)/number # mean
+    error = percent_error(mean, theor_values) # accuracy 
+    # finding standard deviation
+    sig_sum = 0
+    for i in calc_values:
+        sig_sum += (i - mean)**2
+    st_dev = sqrt(1/(number-1) * sig_sum)
+    # finding SDOM
+    SDOM = st_dev/sqrt(number) # precision
+    return mean, error, st_dev, SDOM, number
+
+# root-mean-square deviation
+def RMS(expected, measured):
+    from math import sqrt
+    diff_sq = []
+    for i in range(len(expected)):
+        diff_sq.append((expected[i] - measured[i])**2)
+    RMS = sqrt(sum(diff_sq)/len(diff_sq))
+    return RMS
+
+# corr file error -- translates into error bars and thus standard deviation
+def RMS_corr(corr_file):
+    from astropy.io import fits 
+    from math import sqrt
+    from Chenodlib import RMS
+    table = fits.open(corr_file)[1].data 
+    RMS_RA = RMS(table.field_ra, table.index_ra)
+    RMS_dec = RMS(table.field_dec, table.index_dec)
+    return RMS_RA, RMS_dec
+
+
+def MoG(RA, dec, julian_date, R_vec):
+    # converting julian date to taus
+    tau = julian_to_tau(julian_date)
+
+    # calculating rho hat 1, 2 and 3 using RA and dec
+    rho_hat = RA_dec_to_rho_hat(RA, dec)
+
+    #### FIRST PASS: TRUNCATED F AND G SERIES ####
+    # calculate Ds with rho hats and R vec
+    Dij, D1j, D2j, D3j = Ds(rho_hat, R_vec)
+
+    # use SEL to find initial r2 and rho2, which will be used in truncated f and g to find r2 vec and r dot vec
+    #r2_mag_rho2_mag = SEL(tau, R_vec[1], rho_hat[1], D2j, mu)
+
+    # user chooses an r2 from SEL
+    #r2_choice = 1 
+    #input('''Please select an number corresponding with the r2 you wish to use as an initial guess. (ie. 1 or 2) 
+    #The first value of each set of numbers is the r2 magnitude while the second  value is the rho2 magnitude.''' + str(r2_mag_rho2_mag))
+    #r2_mag = float(r2_mag_rho2_mag[int(r2_choice)-1][0])
+    #rho2_mag = float(r2_mag_rho2_mag[int(r2_choice)-1][1])
+    r2_mag = 1.3
+    rho2_mag = 5
+    # f and g truncated initial pass: use tau1, tau3 and r2 to find f1, f3, g1, and g3
+    # fs = [f1, f3]
+    # gs = [g1, g3]
+    f, g = initial_f_g_pass(r2_mag, [tau[0], tau[1]], mu)
+
+    # use f and g to find c's and d's
+    c, d1, d3 = find_c_d(f, g)
+
+    # use c's and D's to find more accurate rho magnitude 
+    # Dij = [[D0, D11, D12, D13], [D0, D21, D22, D23], [D0, D31, D132, D33]]
+    rho_mag = c_Dij_to_rho_mag(c, D1j, D2j, D3j)
+
+    # use rho mag, rho vec, and earth-sun vec to find r vecs (1, 2, 3)
+    r_vec = []
+    for i in range(len(rho_mag)):
+        r_vec.append(rho_mag[i]*rho_hat[i] - R_vec[i])
+
+    ## obtain r2 vec and r2 do vec ##
+    r2_vec = r_vec[1]
+
+    # use d1, d3, and r vectors to get r2 dot vec
+    r2_dot_vec = d1*r_vec[0] + d3*r_vec[2]
+
+    #### FUTURE ITERATIONS: F AND G FUNCTION ####
+    # check for convergence; see if difference between guesses is getting smaller
+    rho_prev = rho2_mag # SEL code
+    rho_calc = rho_mag[1] # truncated f and g
+    iterations = 1
+
+
+    while abs(float(rho_calc) - float(rho_prev)) > 10e-13:
+        rho_prev = rho_calc # setting current rho2 as a convergence comparison parameter
+        iterations +=1
+
+        # light travel time correction for taus
+        julian_correction = [0,0,0]
+        for i in range(len(julian_correction)):
+            julian_correction[i] = light_travel_correct(julian_date[i], rho_mag[i])
+        tau = julian_to_tau(julian_correction)
+
+        # recalculate f and g function
+        f, g = f_g_function(r2_vec, r2_dot_vec, tau)
+        c, d1, d3 = find_c_d(f, g)
+
+        # use c's and D's to find more accurate rho magnitude 
+        # Dij = [[D0, D11, D12, D13], [D0, D21, D22, D23], [D0, D31, D132, D33]]
+        rho_mag = c_Dij_to_rho_mag(c, D1j, D2j, D3j)
+
+        # use rho mag, rho vec, and earth-sun vec to find r vecs (1, 2, 3)
+        r_vec = []
+        for i in range(len(rho_mag)):
+            r_vec.append(rho_mag[i]*rho_hat[i] - R_vec[i])
+
+        ## obtain r2 vec and r2 do vec ##
+        r2_vec = r_vec[1]
+
+        # use d1, d3, and r vectors to get r2 dot vec
+        r2_dot_vec = d1*r_vec[0] + d3*r_vec[2]
+
+        # setting up next loop
+        rho_calc = rho_mag[1]
+        # breaking out of loop if value doesn't converge
+        if iterations > 100:
+            raise ValueError("A value failed to converge")
+
+    r2_vec = equa_to_eclip(r2_vec, eps).tolist()
+    r2_dot_vec = equa_to_eclip(r2_dot_vec, eps).tolist()
+    # generating 6 orbital elements with r2 vec and r2 dot vec
+    semi_major, eccentricity, inclination_angle, long_of_ascending_node, trueanomaly, arg_of_perihelion, mean_anomaly, julian_perihelion = calc_orbitalelements(r2_vec, r2_dot_vec, julian_date[1])
+
+    return semi_major, eccentricity, degrees(inclination_angle), degrees(long_of_ascending_node), degrees(mean_anomaly), degrees(arg_of_perihelion)
+    """semi_major_all.append(semi_major)
+    eccentricity_all.append(eccentricity)
+    inclination_angle_all.append(degrees(inclination_angle))
+    long_of_ascending_node_all.append(degrees(long_of_ascending_node))
+    mean_anomaly_all.append(degrees(mean_anomaly))
+    if degrees(arg_of_perihelion) > 360: 
+        arg_of_perihelion_all.append(degrees(arg_of_perihelion)-360)
+    else: 
+    arg_of_perihelion_all.append(degrees(arg_of_perihelion))"""
